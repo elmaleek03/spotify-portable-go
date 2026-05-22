@@ -213,6 +213,15 @@ func RegDeleteRun(name string) error {
 // So: prefer Spotify.exe, only fall back to SpotifyLauncher.exe if the
 // main binary is missing (incomplete install). DETACHED_PROCESS keeps the
 // child fully unhooked from our launcher so we can exit immediately.
+//
+// Do NOT set HideWindow:true here. SysProcAttr.HideWindow translates to
+// STARTF_USESHOWWINDOW + wShowWindow=SW_HIDE in the child's STARTUPINFO,
+// and Spotify reads nCmdShow from there to decide how to bring up its
+// main window. With HideWindow set, Spotify boots tray-only -- the
+// process is fully alive but the window stays minimized to the tray
+// until the user right-clicks the tray icon and picks "Open Spotify".
+// Leaving SysProcAttr.HideWindow at its zero value lets the child use
+// SW_SHOWDEFAULT and open normally.
 func LaunchSpotify(p Paths) error {
 	target := p.SpotifyExe
 	if !FileExists(target) {
@@ -221,7 +230,6 @@ func LaunchSpotify(p Paths) error {
 	cmd := exec.Command(target)
 	cmd.Dir = filepath.Dir(target)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:    true,
 		CreationFlags: 0x00000008, // DETACHED_PROCESS
 	}
 	if err := cmd.Start(); err != nil {
