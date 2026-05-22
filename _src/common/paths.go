@@ -13,6 +13,7 @@ type Paths struct {
 	SpotifyDir   string // <root>\Spotify       (install dir, has Spotify.exe)
 	DataDir      string // <root>\SpotifyData   (LocalAppData cache + storage)
 	SpotifyExe   string // <root>\Spotify\Spotify.exe
+	LauncherExe  string // <root>\Spotify\SpotifyLauncher.exe (kept for fallback; not used by default)
 	UsersDir     string // <root>\Spotify\Users (per-user login + prefs)
 	InstallerDir string // <root>\_Installer
 	InstallerExe string // <root>\_Installer\SpotifySetup.exe
@@ -38,6 +39,7 @@ func Resolve() Paths {
 	p.SpotifyDir = filepath.Join(root, "Spotify")
 	p.DataDir = filepath.Join(root, "SpotifyData")
 	p.SpotifyExe = filepath.Join(p.SpotifyDir, "Spotify.exe")
+	p.LauncherExe = filepath.Join(p.SpotifyDir, "SpotifyLauncher.exe")
 	p.UsersDir = filepath.Join(p.SpotifyDir, "Users")
 	p.InstallerDir = filepath.Join(root, "_Installer")
 	p.InstallerExe = filepath.Join(p.InstallerDir, "SpotifySetup.exe")

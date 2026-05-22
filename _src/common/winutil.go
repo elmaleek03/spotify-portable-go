@@ -198,13 +198,28 @@ func RegDeleteRun(name string) error {
 	return cmd.Run()
 }
 
-// LaunchSpotify starts Spotify.exe directly and detaches.
+// LaunchSpotify starts Spotify and detaches.
 //
-// Unlike Discord (which is launched through Update.exe / Squirrel),
-// Spotify.exe is its own launcher and self-updater.
+// On modern Spotify (>= 1.2.x) SpotifyLauncher.exe is *intended* to be the
+// bootstrap: it does an integrity check + self-update probe, then hatches
+// Spotify.exe. In practice, on the portable layout used here, the launcher
+// hangs indefinitely after a single white flash and never spawns
+// Spotify.exe -- it tries to talk to the OS-installed `Spotify Installer`
+// service / `SpotifyStartupTask.exe` which do not exist on a portable copy,
+// and stalls waiting on them. Spotify.exe by itself starts cleanly: it
+// reads the same SpotifyData/ CEF state, finds Apps\xpui.spa + login.spa
+// in its own directory, and shows the UI within ~1 s.
+//
+// So: prefer Spotify.exe, only fall back to SpotifyLauncher.exe if the
+// main binary is missing (incomplete install). DETACHED_PROCESS keeps the
+// child fully unhooked from our launcher so we can exit immediately.
 func LaunchSpotify(p Paths) error {
-	cmd := exec.Command(p.SpotifyExe)
-	cmd.Dir = filepath.Dir(p.SpotifyExe)
+	target := p.SpotifyExe
+	if !FileExists(target) {
+		target = p.LauncherExe
+	}
+	cmd := exec.Command(target)
+	cmd.Dir = filepath.Dir(target)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
 		CreationFlags: 0x00000008, // DETACHED_PROCESS
