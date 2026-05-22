@@ -29,8 +29,8 @@ runs, so a reboot does not reset Spotify state.
 
 | File                    | Audience | Window                | Purpose                                                                      |
 | ----------------------- | -------- | --------------------- | ---------------------------------------------------------------------------- |
-| `Launch_Spotify.exe`    | Clients  | None (GUI subsystem)  | Restores junctions + registry, wipes user/cache state, launches Spotify, exits.|
-| `Spotify_Updater.exe`   | Admin    | Console + progress    | First-time install, then a 120 s self-update window for later runs.          |
+| `Launch_Spotify.exe`    | Clients  | None (GUI subsystem)  | Restores junctions + registry, wipes login state, launches Spotify, exits.|
+| `Spotify_Updater.exe`   | Admin    | Console + progress    | Downloads SpotifySetup.exe and runs it through the portable junctions, every run. |
 
 The two binaries are designed to be the only thing anyone runs.
 `Launch_Spotify.exe` is intentionally silent (no console, no prompts, no
@@ -72,13 +72,14 @@ reboot is fine.
 1. Drop `spotify-portable-go/` onto your portable volume.
 2. Double-click `Spotify_Updater.exe`.
 3. Wait for the progress bar. It will:
+   - create `Spotify/` and `SpotifyData/` if missing,
+   - replace `%APPDATA%\Spotify` with a junction to `Spotify/` and
+     `%LOCALAPPDATA%\Spotify` with a junction to `SpotifyData/`
+     (migrating any existing data first if the portable folders are empty),
    - download `SpotifySetup.exe`,
-   - run the installer,
+   - run the installer; because the junctions are already in place,
+     `SpotifySetup.exe` writes straight into `Spotify/` and `SpotifyData/`,
    - kill the auto-launched Spotify so the install dir unlocks,
-   - copy the install into `Spotify/`,
-   - replace `%APPDATA%\Spotify` with a junction to `Spotify/`,
-   - create `SpotifyData/` and replace `%LOCALAPPDATA%\Spotify` with a
-     junction to it (migrating any existing data if `SpotifyData/` is empty),
    - export `HKCU\SOFTWARE\Classes\spotify` to `_Reg\Spotify.reg`,
    - delete Spotify's autostart `Run` entries.
 
@@ -89,25 +90,31 @@ When it closes, the portable install is ready.
 Users double-click `Launch_Spotify.exe`. Nothing else.
 
 No console window appears. The launcher kills any running Spotify, rebuilds
-both junctions, **wipes `Spotify\Users\` and `SpotifyData/` so every session
-starts clean (no login, no offline cache, no logs)**, imports the registry,
-starts Spotify, and exits.
+both junctions, **wipes `Spotify\Users\` so every session starts logged-out
+(no login, no offline tracks)**, imports the registry, starts Spotify via
+`Spotify.exe`, and exits.
 
-The install binaries (`Spotify.exe` + resources) are preserved across
-sessions so updates persist even though user data is wiped.
+`SpotifyData/` (CEF / Chromium browser state) is intentionally preserved
+across sessions because Spotify reads it on startup; wiping it leaves
+Spotify crashing in CEF init with the classic white-window-then-exit. The
+install binaries (`Spotify.exe` + `SpotifyLauncher.exe` + resources) are
+also preserved so updates persist even though login state is wiped.
 
 ### 3. Periodic updates (admin)
 
 Run `Spotify_Updater.exe` again on the admin schedule of your choice (manual,
-Task Scheduler, on logon, whatever). It will:
+Task Scheduler, on logon, whatever). The flow is the same as first-time
+setup:
 
-1. Ensure both junctions still exist.
-2. Kill any running Spotify.
-3. Launch Spotify so its built-in auto-updater downloads the new version
-   into `Spotify/`.
-4. Show a 120 second countdown bar (`[==========    ] 60% Updating 72/120`).
-5. Kill every Spotify process when the timer hits zero.
-6. Refresh the registry export and exit.
+1. Stop any running Spotify.
+2. Ensure both junctions still exist (`%APPDATA%\Spotify` -> `Spotify\`,
+   `%LOCALAPPDATA%\Spotify` -> `SpotifyData\`).
+3. Download a fresh `SpotifySetup.exe` with a progress bar.
+4. Run the installer. Because the junctions are already in place, every
+   file the installer writes to `%APPDATA%\Spotify` lands in the portable
+   `Spotify\` folder.
+5. Kill the installer-launched Spotify so the install dir unlocks.
+6. Refresh the registry export and disable autostart entries.
 
 That's the entire update workflow. The terminal closes with the updater.
 
@@ -118,16 +125,17 @@ binary you run and the state of the project root.
 
 `Spotify_Updater.exe`:
 
-- If `Spotify/Spotify.exe` is missing -> first-time setup mode.
-- Otherwise -> launch + 120 s window + kill all Spotify processes.
+- Always: kill Spotify, ensure junctions, download `SpotifySetup.exe`,
+  run it, kill the installer-launched Spotify, refresh the registry
+  export. Same flow on first install and on every later run.
 
 `Launch_Spotify.exe`:
 
 - If `Spotify/Spotify.exe` is missing -> exit 1 silently (admin must run the
   updater first).
 - Otherwise -> kill any running Spotify, ensure junctions, wipe
-  `Spotify\Users\` and `SpotifyData/` for a clean session, import reg, start
-  Spotify, exit.
+  `Spotify\Users\` for a logged-out clean session, import reg, start
+  Spotify via `Spotify.exe`, exit.
 
 ## Building from source
 
@@ -157,13 +165,13 @@ _src/
   common/
     paths.go                    portable path resolution + AppData targets
     console.go                  AllocConsole + ANSI VT for the GUI updater
-    progress.go                 \r progress bar with smoothed speed (also drives the 120s countdown)
+    progress.go                 \r progress bar with smoothed speed + m:ss countdown formatter
     winutil.go                  taskkill, mklink /J, reg import/export, EnsureJunction with empty-target migration
     download.go                 HTTP download with progress + installer runner
   cmd/
     launcher/main.go            silent client launcher
     launcher/app.manifest       Win32 manifest (DPI / UTF-8 / asInvoker)
-    updater/main.go             first-time setup + 120s update window
+    updater/main.go             unified install/update flow (download SpotifySetup.exe + run via junction)
     updater/app.manifest        Win32 manifest
 ```
 
@@ -176,19 +184,31 @@ _src/
   which works for the current user.
 - Spotify's installer (`SpotifySetup.exe`) has no documented silent flag
   unlike Discord's `-s`. It runs mostly unattended on its own and
-  auto-launches Spotify when finished; the updater kills that auto-launched
-  process before relocating the install.
-- The 120 second update window is a fixed wait. If your network is slow you
-  can extend it by editing the `sleepSeconds` constant in
-  `_src/cmd/updater/main.go` and rebuilding.
+  auto-launches Spotify when finished; the updater kills that
+  auto-launched process at the end of every run.
+- The updater downloads and runs the installer on every invocation
+  rather than relying on Spotify's in-app self-updater. The portable
+  junctions (`%APPDATA%\Spotify` -> `Spotify\`, `%LOCALAPPDATA%\Spotify`
+  -> `SpotifyData\`) make `SpotifySetup.exe` write straight into the
+  portable folders, so no manual relocation step is needed.
 - First run migrates anything currently in `%APPDATA%\Spotify` /
   `%LOCALAPPDATA%\Spotify` into `Spotify/` / `SpotifyData/` if the portable
   folders are empty, so an existing logged-in user does not have to log in
   again on the portable copy (until the next clean-session launch wipes it).
 - Unlike Discord, the install dir (`Spotify/`) is NOT wiped on launch
   because Spotify's executable lives there; only the `Users\` subfolder
-  (login token + offline tracks) is wiped. `SpotifyData/` (cache) is wiped
-  in full.
+  (login token + offline tracks) is wiped. `SpotifyData/` (CEF/Chromium
+  state) is also preserved across sessions: Spotify reads it during CEF
+  init and wiping it causes the classic white-window crash.
+- The launcher entrypoint is `Spotify.exe` directly, not
+  `SpotifyLauncher.exe`. The launcher binary is written for the standard
+  installed copy of Spotify and tries to talk to the OS-level
+  `Spotify Installer` service / `SpotifyStartupTask.exe` for self-update
+  on startup. Neither exists on a portable copy, so `SpotifyLauncher.exe`
+  shows a brief white flash and then stalls forever without ever
+  spawning `Spotify.exe`. `Spotify.exe` on its own reads the same
+  CEF/Chromium state from `SpotifyData/` and the same `Apps\xpui.spa` +
+  `Apps\login.spa` from `Spotify/`, and shows the UI within ~1 second.
 
 ## License
 
